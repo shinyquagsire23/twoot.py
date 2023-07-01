@@ -17,6 +17,7 @@ import re
 import json
 import fcntl
 import pickle
+import time
 from getpass import getpass
 from urllib.parse import urlparse
 
@@ -539,6 +540,30 @@ class Twoot:
 
         return r.content, c_type
 
+    def __download_any_video(self, url):
+        """Download a video from `url`.
+
+        Args:
+            url (str): the video url
+
+        Returns:
+            raw binary data
+            str: content type
+        """
+        print (url)
+        
+        os.system("rm -f twoot-convert.mp4 ; youtube-dl -o twoot-convert.mp4 " + url)
+        try:
+            f = open("twoot-convert.mp4", "rb")
+            contents = f.read()
+            f.close()
+        except:
+            logger.warn('Data from {} is not a video'.format(url))
+            return None, None
+
+        print ("Done youtube-dl'ing.")
+        return contents, "video/mp4"
+
     def __download_video(self, url):
         """Download a video from `url`.
 
@@ -549,19 +574,29 @@ class Twoot:
             raw binary data
             str: content type
         """
+        print (url)
         r = requests.get(url)
         if r.status_code != 200:
             logger.warn('Failed to get a video from {}'.format(url))
             return None
 
+        print (r.headers)
         c_type = r.headers['content-type']
+        if c_type == "application/x-mpegURL" or c_type == "video/mp4":
+            os.system("rm -f twoot-convert.mp4 ; youtube-dl -o twoot-convert.mp4 " + url)
+            f = open("twoot-convert.mp4", "rb")
+            contents = f.read()
+            f.close()
+            print ("Done youtube-dl'ing.")
+            return contents, "video/mp4"
+
         if 'video' not in c_type:
             logger.warn('Data from {} is not a video'.format(url))
             return None
 
         return r.content, c_type
 
-    def __post_media_to_mastodon(self, media):
+    def __post_media_to_mastodon(self, media, orig_url):
         """Get actual data of `media` from Twitter and post it to Mastodon.
 
         Args:
@@ -571,6 +606,7 @@ class Twoot:
             a Mastodon media dict
         """
         media_type = media['type']
+        print (media_type)
 
         if media_type == 'photo':
             img, mime_type = self.__download_image(media['media_url_https'])
@@ -587,9 +623,13 @@ class Twoot:
                 logger.exception('Failed to post an image: {}'.format(e))
                 return None
 
-        elif media_type == 'animated_gif':
-            video_url = media['video_info']['variants'][0]['url']
-            video, mime_type = self.__download_video(video_url)
+        elif media_type == 'animated_gif' or media_type == 'video':
+            #video_url = media['video_info']['variants'][0]['url']
+            #video, mime_type = self.__download_video(video_url)
+            print ("Safety sleep...")
+            time.sleep(30)
+            print ("Safety sleep done.")
+            video, mime_type = self.__download_any_video(orig_url)
 
             try:
                 r = self.mastodon.media_post(video, mime_type=mime_type)
@@ -605,19 +645,23 @@ class Twoot:
             logger.warn('Unknown media type found. Skipping.')
 
     def __toot(self, text, in_reply_to_id=None, media_ids=None):
-        try:
-            r = self.mastodon.status_post(text,
-                                          in_reply_to_id=in_reply_to_id,
-                                          media_ids=media_ids)
+        for i in range(0, 30):
+            try:
+                r = self.mastodon.status_post(text,
+                                              in_reply_to_id=in_reply_to_id,
+                                              media_ids=media_ids)
 
-            logger.debug('Recieved toot info: {}'.format(str(r)))
+                logger.debug('Recieved toot info: {}'.format(str(r)))
 
-            return r
+                return r
 
-        # if failed, report it
-        except Exception as e:
-            logger.exception('Failed to create a toot: {}'.format(e))
-            return None
+            # if failed, report it
+            except Exception as e:
+                logger.exception('Failed to create a toot: {}'.format(e))
+                time.sleep(30)
+                continue
+        return None
+            
 
     def __boost(self, target_id):
         try:
@@ -718,7 +762,7 @@ class Twoot:
 
         else:
             mastodon_media = [
-                self.__post_media_to_mastodon(m) for m in twitter_media
+                self.__post_media_to_mastodon(m, "https://twitter.com/ShinyQuagsire/status/" + str(tweet_id)) for m in twitter_media
             ]
             media_ids = [m['id'] for m in mastodon_media if m is not None]
             media_num = len(media_ids)
@@ -767,6 +811,7 @@ class Twoot:
             a Twitter media dict
         """
         media_type = media['type']
+        print (media_type)
 
         if media_type == 'image':
             img, mime_type = self.__download_image(media['url'])
